@@ -1,6 +1,6 @@
 # Mochi Mart 🍡
 
-A cozy public marketplace for Codex plugins.
+A yummy public marketplace for Codex plugins.
 
 ## Install
 
