@@ -1,0 +1,72 @@
+#!/bin/bash
+
+set -euo pipefail
+shopt -s nullglob
+
+readonly marketplace_name='mochi-mart'
+readonly marketplace_source='rktoomey/mochi-mart'
+readonly marketplace_git_url='https://github.com/rktoomey/mochi-mart.git'
+readonly plugin_id="durable-plan@${marketplace_name}"
+readonly codex_bin="${CODEX_BIN:-codex}"
+readonly jq_bin="${JQ_BIN:-jq}"
+readonly codex_home="${CODEX_HOME:-${HOME}/.codex}"
+
+for required_command in "${codex_bin}" "${jq_bin}"; do
+  if ! command -v "${required_command}" >/dev/null 2>&1; then
+    printf 'Required command not found: %s\n' "${required_command}" >&2
+    exit 69
+  fi
+done
+
+umask 077
+if ! mkdir -p "${codex_home}"; then
+  printf 'Could not create Codex home: %s\n' "${codex_home}" >&2
+  exit 1
+fi
+
+if ! marketplaces_json="$("${codex_bin}" plugin marketplace list --json)"; then
+  printf 'Could not list Codex plugin marketplaces\n' >&2
+  exit 1
+fi
+readonly marketplaces_json
+
+if ! marketplace_count="$("${jq_bin}" -er \
+  --arg name "${marketplace_name}" \
+  "[.marketplaces[] | select(.name == \$name)] | length" \
+  <<<"${marketplaces_json}")"; then
+  printf 'Codex returned invalid marketplace JSON\n' >&2
+  exit 1
+fi
+readonly marketplace_count
+
+if [[ "${marketplace_count}" -gt 1 ]]; then
+  printf 'Multiple Codex marketplaces are named %s\n' \
+    "${marketplace_name}" >&2
+  exit 1
+fi
+
+if [[ "${marketplace_count}" -eq 1 ]]; then
+  existing_source="$("${jq_bin}" -er \
+    --arg name "${marketplace_name}" \
+    ".marketplaces[] | select(.name == \$name)
+      | (.marketplaceSource.source // .root)" \
+    <<<"${marketplaces_json}")"
+  readonly existing_source
+  if [[ "${existing_source}" != "${marketplace_git_url}" ]]; then
+    printf 'Marketplace %s already points to %s, not %s\n' \
+      "${marketplace_name}" "${existing_source}" \
+      "${marketplace_git_url}" >&2
+    exit 1
+  fi
+  "${codex_bin}" plugin marketplace upgrade "${marketplace_name}" >/dev/null
+else
+  "${codex_bin}" plugin marketplace add "${marketplace_source}" >/dev/null
+fi
+
+"${codex_bin}" plugin add "${plugin_id}" >/dev/null
+"${codex_bin}" features enable hooks >/dev/null
+
+printf 'Installed %s and enabled Codex lifecycle hooks.\n' "${plugin_id}"
+printf 'Start a new interactive Codex session, run /hooks, inspect the two '
+printf 'durable-plan definitions, and trust only those definitions.\n'
+printf 'Leave unrelated hooks disabled or untrusted.\n'

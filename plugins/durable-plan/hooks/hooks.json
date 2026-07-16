@@ -1,0 +1,28 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${PLUGIN_ROOT}/hooks/durable-plan\"",
+            "timeout": 5,
+            "statusMessage": "Applying durable Plan-mode protocol..."
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${PLUGIN_ROOT}/hooks/durable-plan\"",
+            "timeout": 10,
+            "statusMessage": "Checking for a decision-complete plan..."
+          }
+        ]
+      }
+    ]
+  }
+}

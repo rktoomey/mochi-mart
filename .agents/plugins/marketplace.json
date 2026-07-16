@@ -1,0 +1,20 @@
+{
+  "name": "mochi-mart",
+  "interface": {
+    "displayName": "Mochi Mart"
+  },
+  "plugins": [
+    {
+      "name": "durable-plan",
+      "source": {
+        "source": "local",
+        "path": "./plugins/durable-plan"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

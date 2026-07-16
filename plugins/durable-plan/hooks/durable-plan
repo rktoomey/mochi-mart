@@ -1,0 +1,191 @@
+#!/bin/bash
+
+set -euo pipefail
+shopt -s nullglob
+
+readonly jq_bin="${JQ_BIN:-jq}"
+readonly git_bin="${GIT_BIN:-git}"
+
+emit_json_error() {
+  local reason="$1"
+
+  "${jq_bin}" -cn \
+    --arg message "Durable Plan not saved: ${reason}" \
+    "{systemMessage:\$message}"
+}
+
+retry_marker_once() {
+  local reason="$1"
+  local active="$2"
+
+  if [[ "${active}" == "true" ]]; then
+    emit_json_error "${reason}"
+    return
+  fi
+
+  "${jq_bin}" -cn \
+    --arg reason "${reason}" \
+    "{decision:\"block\",reason:\$reason}"
+}
+
+normalize_repo_key() {
+  local value="$1"
+
+  value="${value##*/}"
+  value="${value##*:}"
+  value="${value%.git}"
+  printf '%s' "${value}" |
+    LC_ALL=C tr '[:upper:]' '[:lower:]' |
+    LC_ALL=C sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//'
+}
+
+if ! command -v "${jq_bin}" >/dev/null 2>&1; then
+  printf 'Durable Plan requires jq\n' >&2
+  exit 1
+fi
+
+if ! input="$(${jq_bin} -c .)"; then
+  printf 'Durable Plan received invalid hook JSON\n' >&2
+  exit 1
+fi
+readonly input
+
+event_name="$("${jq_bin}" -r '.hook_event_name // empty' <<<"${input}")"
+readonly event_name
+permission_mode="$("${jq_bin}" -r '.permission_mode // empty' <<<"${input}")"
+readonly permission_mode
+
+if [[ "${event_name}" == "UserPromptSubmit" ]]; then
+  if [[ "${permission_mode}" != "plan" ]]; then
+    exit 0
+  fi
+
+  readonly context=$'Durable Plan protocol:\n- End every Plan-mode assistant response with exactly one terminal marker.\n- Use `<!-- durable-plan: draft -->` while questions, investigation, or implementation-affecting decisions remain.\n- Use `<!-- durable-plan: final slug=<slug> -->` only when the complete response is a decision-complete Markdown plan that another engineer can implement without new design choices.\n- A final slug must match `^[a-z0-9][a-z0-9-]{0,79}$`.\n- Put no conversational preamble outside a final plan.'
+  "${jq_bin}" -cn \
+    --arg context "${context}" \
+    "{hookSpecificOutput:{hookEventName:\"UserPromptSubmit\",additionalContext:\$context}}"
+  exit 0
+fi
+
+if [[ "${event_name}" != "Stop" ]]; then
+  exit 0
+fi
+
+if [[ "${permission_mode}" != "plan" ]]; then
+  printf '{}\n'
+  exit 0
+fi
+
+message="$("${jq_bin}" -r '.last_assistant_message // empty' <<<"${input}")"
+readonly message
+stop_hook_active="$("${jq_bin}" -r '.stop_hook_active // false' <<<"${input}")"
+readonly stop_hook_active
+
+if "${jq_bin}" -en \
+  --arg message "${message}" \
+  "\$message | test(\"(?s)<!-- durable-plan: draft -->[[:space:]]*\$\")" \
+  >/dev/null; then
+  printf '{}\n'
+  exit 0
+fi
+
+if ! final_json="$("${jq_bin}" -cn \
+  --arg message "${message}" \
+  "\$message | capture(\"(?s)^(?<plan>.*)[[:space:]]*<!-- durable-plan: final slug=(?<slug>[a-z0-9][a-z0-9-]{0,79}) -->[[:space:]]*\$\")")"; then
+  retry_marker_once \
+    'End the response with a valid durable-plan draft or final marker.' \
+    "${stop_hook_active}"
+  exit 0
+fi
+readonly final_json
+
+plan="$("${jq_bin}" -r '.plan' <<<"${final_json}")"
+plan="${plan%$'\n'}"
+readonly plan
+slug="$("${jq_bin}" -r '.slug' <<<"${final_json}")"
+readonly slug
+
+if [[ -z "${plan}" || "${plan}" != \#* ]]; then
+  retry_marker_once \
+    'A final response must be a non-empty Markdown plan beginning with a heading.' \
+    "${stop_hook_active}"
+  exit 0
+fi
+
+cwd="$("${jq_bin}" -r '.cwd // empty' <<<"${input}")"
+readonly cwd
+if [[ -z "${cwd}" ]] ||
+  ! repo_root="$("${git_bin}" -C "${cwd}" rev-parse --show-toplevel 2>/dev/null)"; then
+  emit_json_error 'the session working directory is not inside a Git repository.'
+  exit 0
+fi
+readonly repo_root
+
+if origin_url="$("${git_bin}" -C "${repo_root}" remote get-url origin 2>/dev/null)"; then
+  repo_source="${origin_url}"
+else
+  repo_source="${repo_root##*/}"
+fi
+readonly repo_source
+repo_key="$(normalize_repo_key "${repo_source}")"
+readonly repo_key
+if [[ -z "${repo_key}" ]]; then
+  emit_json_error 'the repository name could not be normalized safely.'
+  exit 0
+fi
+
+readonly codex_home="${CODEX_HOME:-${HOME}/.codex}"
+readonly plan_dir="${codex_home}/plans/${repo_key}"
+readonly plan_path="${plan_dir}/${slug}.md"
+umask 077
+if ! mkdir -p "${plan_dir}"; then
+  emit_json_error "could not create ${plan_dir}."
+  exit 0
+fi
+
+temp_path=''
+cleanup() {
+  if [[ -n "${temp_path}" && -e "${temp_path}" ]]; then
+    rm -f "${temp_path}"
+  fi
+}
+trap cleanup EXIT
+
+if ! temp_path="$(mktemp "${plan_dir}/.${slug}.XXXXXX" 2>/dev/null)"; then
+  emit_json_error "could not create a temporary file in ${plan_dir}."
+  exit 0
+fi
+
+if ! printf '%s\n' "${plan}" >"${temp_path}"; then
+  emit_json_error "could not write ${plan_path}."
+  exit 0
+fi
+
+if [[ -f "${plan_path}" ]] && cmp -s "${temp_path}" "${plan_path}"; then
+  rm -f "${temp_path}"
+  temp_path=''
+  status='Unchanged'
+else
+  if ! mv -f "${temp_path}" "${plan_path}"; then
+    emit_json_error "could not replace ${plan_path}."
+    exit 0
+  fi
+  temp_path=''
+  status='Saved'
+fi
+readonly status
+trap - EXIT
+
+readonly implementation_prompt="Implement ${plan_path}. Verify live repository state before editing."
+printf -v quoted_repo_root '%q' "${repo_root}"
+printf -v quoted_prompt '%q' "${implementation_prompt}"
+readonly terra_command="codex -m gpt-5.6-terra -C ${quoted_repo_root} ${quoted_prompt}"
+readonly system_message="${status}: ${plan_path}
+Repository: ${repo_root}
+
+Launch Terra in a new interactive session:
+${terra_command}"
+
+"${jq_bin}" -cn \
+  --arg message "${system_message}" \
+  "{systemMessage:\$message}"

@@ -1,0 +1,22 @@
+{
+  "name": "durable-plan",
+  "version": "0.1.0",
+  "description": "Save decision-complete Codex plans and hand them to Terra.",
+  "author": {
+    "name": "Mochi Mart Maintainer",
+    "url": "https://github.com/rktoomey/mochi-mart"
+  },
+  "homepage": "https://github.com/rktoomey/mochi-mart#durable-plan",
+  "repository": "https://github.com/rktoomey/mochi-mart",
+  "license": "MIT",
+  "keywords": ["codex", "planning", "handoff", "terra"],
+  "interface": {
+    "displayName": "Durable Plan",
+    "shortDescription": "Persist final Plan-mode decisions",
+    "longDescription": "Persist final plans and display a Terra command.",
+    "developerName": "Mochi Mart Maintainer",
+    "category": "Productivity",
+    "capabilities": ["Lifecycle hooks", "Write"],
+    "defaultPrompt": ["Use Durable Plan in Plan mode."]
+  }
+}

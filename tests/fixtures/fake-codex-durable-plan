@@ -1,0 +1,44 @@
+#!/bin/bash
+
+set -euo pipefail
+shopt -s nullglob
+
+if [[ -z "${COMMAND_LOG:-}" ]]; then
+  printf 'COMMAND_LOG is required\n' >&2
+  exit 64
+fi
+
+if [[ -n "${CODEX_HOME:-}" && ! -d "${CODEX_HOME}" ]]; then
+  printf 'CODEX_HOME does not exist: %s\n' "${CODEX_HOME}" >&2
+  exit 1
+fi
+
+printf '%q' "$1" >>"${COMMAND_LOG}"
+shift
+for argument in "$@"; do
+  printf ' %q' "${argument}" >>"${COMMAND_LOG}"
+done
+printf '\n' >>"${COMMAND_LOG}"
+
+if [[ "$*" == 'marketplace list --json' ]]; then
+  case "${FAKE_MARKETPLACE_MODE:-absent}" in
+    absent)
+      printf '{"marketplaces":[]}\n'
+      ;;
+    matching)
+      printf '%s\n' \
+        '{"marketplaces":[{"name":"mochi-mart","root":"/marketplaces/mochi-mart","marketplaceSource":{"sourceType":"git","source":"https://github.com/rktoomey/mochi-mart.git"}}]}'
+      ;;
+    mismatch)
+      printf '%s\n' \
+        '{"marketplaces":[{"name":"mochi-mart","root":"/other/mochi-mart","marketplaceSource":{"sourceType":"git","source":"https://github.com/example/mochi-mart.git"}}]}'
+      ;;
+    *)
+      printf 'Unknown FAKE_MARKETPLACE_MODE\n' >&2
+      exit 64
+      ;;
+  esac
+  exit 0
+fi
+
+printf '{}\n'
