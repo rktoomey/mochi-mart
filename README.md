@@ -1,4 +1,4 @@
-# Mochi Mart 🍡
+# Mochi Mart ![Mochi mascot](assets/mochi.png)
 
 A yummy public marketplace for Codex plugins.
 
